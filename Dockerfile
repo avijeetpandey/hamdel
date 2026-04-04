@@ -1,5 +1,5 @@
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
-FROM eclipse-temurin:17-jdk-alpine AS builder
+FROM eclipse-temurin:21-jdk AS builder
 WORKDIR /app
 
 COPY mvnw pom.xml ./
@@ -12,11 +12,11 @@ COPY src ./src
 RUN ./mvnw package -DskipTests -q
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
-FROM eclipse-temurin:17-jre-alpine AS runtime
+FROM eclipse-temurin:21-jre AS runtime
 WORKDIR /app
 
 # Security: run as non-root
-RUN addgroup -S hamdel && adduser -S hamdel -G hamdel
+RUN groupadd -r hamdel && useradd -r -g hamdel hamdel
 USER hamdel
 
 COPY --from=builder /app/target/hamdel-0.0.1-SNAPSHOT.jar app.jar
