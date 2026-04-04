@@ -14,7 +14,7 @@ export const options = {
     { duration: '30s', target: 0    },   // ramp down
   ],
   thresholds: {
-    http_req_duration: ['p(99)<5'],       // SLA: P99 < 5ms
+    http_req_duration: ['p(99)<200'],     // local-dev SLA: P99 < 200ms (use p(99)<5 for prod cluster)
     errors:            ['rate<0.01'],     // error rate < 1%
   },
 };
