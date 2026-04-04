@@ -1,6 +1,6 @@
 # Hamdel — High-Throughput Log Ingestion Microservice
 
-**Hamdel** is a high-throughput heartbeat ingestion pipeline built with Java 17, Spring Boot 3, and a Hexagonal (Clean) Architecture. It was designed as a direct evolution of the Bifrost architecture.
+**Hamdel** is a high-throughput heartbeat ingestion pipeline built with Java 21, Spring Boot 3.3.5, and a Hexagonal (Ports & Adapters) Architecture.
 
 ---
 
@@ -11,11 +11,6 @@
 │                           INBOUND ADAPTERS                              │
 │  REST Controller (Virtual Threads)  │  Protobuf binary  │  JSON        │
 └──────────────────────────┬──────────────────────────────────────────────┘
-                           │
-                  ┌────────▼────────┐
-                  │  LMAX Disruptor │  ← Non-blocking ring buffer (65 536 slots)
-                  │   Ring Buffer   │    O(1) publish, < 5ms SLA guaranteed
-                  └────────┬────────┘
                            │
        ┌───────────────────▼───────────────────┐
        │         APPLICATION LAYER             │
@@ -29,10 +24,10 @@
   │   Kafka     │  │ Resilience4j   │  │    PostgreSQL      │
   │  Producer   │  │ Circuit Breaker│  │  JPA (batch 100)   │
   │ (acks=all)  │  │  ↓ OPEN        │  │  Idempotency guard │
-  │ SessionId   │  │  SQS Fallback  │  └───────────────────┘
-  │ Partitioner │  │  (Panic Mode)  │
+  │ SessionId   │  │  In-Memory     │  └───────────────────┘
+  │ Partitioner │  │  Fallback Queue│
   └──────┬──────┘  └───────────────┘
-         │
+         │             (LinkedBlockingQueue, 10k slots — no AWS required)
   ┌──────▼──────────────────────────────────────┐
   │           KAFKA TOPIC: heartbeat-events     │
   │  12 partitions • RF=3 • acks=all            │
@@ -41,7 +36,7 @@
          │
   ┌──────▼──────────────────────────────────────┐
   │          CONSUMER GROUP: hamdel-kpi-group   │
-  │  Batch Listener (500 msgs) • concurrency=3  │
+  │  Batch Listener • concurrency=3             │
   │  Idempotency: event_id DB constraint        │
   │  KPIs: VST, PFR, Rebuffering Ratio          │
   └─────────────────────────────────────────────┘
@@ -50,7 +45,7 @@
   │               OBSERVABILITY                    │
   │  /actuator/prometheus  →  Prometheus  →  Grafana│
   │  Panels: Ingestion RPS, P99 Latency,           │
-  │          Kafka Lag, Panic Mode, KPIs           │
+  │          Kafka Lag, Fallback Active, KPIs      │
   └────────────────────────────────────────────────┘
 ```
 
@@ -73,14 +68,13 @@ docker-compose up --build
 
 This starts:
 
-| Service      | URL                                   |
-|--------------|---------------------------------------|
-| **Hamdel**   | http://localhost:8080                 |
-| **Grafana**  | http://localhost:3000 (admin / admin) |
-| **Prometheus**| http://localhost:9090                |
-| **Kafka**    | localhost:9092                        |
-| **PostgreSQL**| localhost:5432 (hamdel / hamdel)     |
-| **LocalStack (SQS)** | http://localhost:4566         |
+| Service       | URL                                   |
+|---------------|---------------------------------------|
+| **Hamdel**    | http://localhost:8080                 |
+| **Grafana**   | http://localhost:3000 (admin / admin) |
+| **Prometheus**| http://localhost:9090                 |
+| **Kafka**     | localhost:9092                        |
+| **PostgreSQL**| localhost:5432 (hamdel / hamdel)      |
 
 ---
 
@@ -158,15 +152,15 @@ Integration tests spin up real PostgreSQL and Kafka containers via Testcontainer
 
 ## Key Design Decisions
 
-| Concern          | Solution                                              |
-|------------------|-------------------------------------------------------|
-| High throughput  | Virtual Threads (Loom) + LMAX Disruptor ring buffer   |
-| Protocol         | Protobuf binary — minimal network overhead            |
-| Ordering         | Custom `SessionIdPartitioner` — murmur2 hash of sessionId |
-| Durability       | `acks=all`, RF=3, `min.insync.replicas=2`            |
-| Resilience       | Resilience4j CB → SQS FIFO Panic Mode fallback        |
-| Retry            | Exponential backoff + jitter (max 5 retries, 30s cap) |
-| Idempotency      | `event_id` UNIQUE DB constraint + pre-check           |
-| KPIs             | VST, PFR, Rebuffering Ratio computed per batch        |
-| Observability    | Micrometer → Prometheus → pre-provisioned Grafana dashboard |
+| Concern          | Solution                                                         |
+|------------------|------------------------------------------------------------------|
+| High throughput  | Java 21 Virtual Threads — no thread-per-request bottleneck       |
+| Protocol         | Protobuf binary — minimal network overhead                       |
+| Ordering         | Custom `SessionIdPartitioner` — murmur2 hash of sessionId        |
+| Durability       | `acks=all`, RF=3, `min.insync.replicas=2`                        |
+| Resilience       | Resilience4j CB → `InMemoryFallbackPublisher` (10k-slot queue)   |
+| Local dev        | No AWS or external cloud services required                       |
+| Idempotency      | `event_id` UNIQUE DB constraint + pre-check in consumer          |
+| KPIs             | VST avg, PFR, Rebuffering Ratio computed per batch               |
+| Observability    | Micrometer → Prometheus → pre-provisioned Grafana dashboard      |
 | Architecture     | Hexagonal (Ports & Adapters) — zero framework coupling in domain |
