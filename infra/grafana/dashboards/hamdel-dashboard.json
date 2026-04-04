@@ -1,0 +1,93 @@
+{
+  "title": "Hamdel — Ingestion Pipeline",
+  "uid": "hamdel-main",
+  "schemaVersion": 36,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Ingestion RPS",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(rate(hamdel_ingest_latency_seconds_count[1m]))",
+          "legendFormat": "RPS"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Ingestion P99 Latency (ms)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(hamdel_ingest_latency_seconds_bucket[1m])) by (le)) * 1000",
+          "legendFormat": "P99"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Kafka Consumer Lag",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "targets": [
+        {
+          "expr": "sum(kafka_consumer_records_lag) by (topic)",
+          "legendFormat": "{{topic}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Panic Mode Active",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "targets": [
+        {
+          "expr": "hamdel_panic_mode_active",
+          "legendFormat": "Panic Mode"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "thresholds": {
+          "steps": [
+            {"color": "green", "value": 0},
+            {"color": "red",   "value": 1}
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Video Start Time (VST) avg ms",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 12},
+      "targets": [
+        {"expr": "hamdel_kpi_vst_ms", "legendFormat": "VST avg"}
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Playback Failure Rate",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 12},
+      "targets": [
+        {"expr": "hamdel_kpi_pfr", "legendFormat": "PFR"}
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Rebuffering Ratio",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 12},
+      "targets": [
+        {"expr": "hamdel_kpi_rebuf_ratio", "legendFormat": "Rebuf Ratio"}
+      ]
+    }
+  ]
+}
