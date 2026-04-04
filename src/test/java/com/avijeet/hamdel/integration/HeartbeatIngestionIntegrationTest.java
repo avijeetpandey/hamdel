@@ -1,7 +1,7 @@
 package com.avijeet.hamdel.integration;
 
-import com.avijeet.hamdel.adapter.inbound.rest.HeartbeatRequest;
-import com.avijeet.hamdel.adapter.outbound.persistence.repository.HeartbeatEventJpaRepository;
+import com.avijeet.hamdel.dto.HeartbeatRequest;
+import com.avijeet.hamdel.repository.jpa.HeartbeatEventJpaRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
