@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package com.avijeet.hamdel.proto;
+
+option java_package = "com.avijeet.hamdel.proto";
+option java_outer_classname = "HeartbeatProto";
+option java_multiple_files = true;
+
+// Inbound heartbeat event from a client player
+message HeartbeatEvent {
+  string event_id      = 1;  // UUID – used for idempotency
+  string session_id    = 2;  // Partition key
+  string client_id     = 3;
+  string content_id    = 4;
+  int64  timestamp_ms  = 5;  // Epoch millis
+
+  // Playback metrics
+  double video_start_time_ms  = 6;   // Time to first frame (ms)
+  bool   playback_failed       = 7;
+  double rebuffer_duration_ms  = 8;
+  double playback_duration_ms  = 9;
+
+  // Device context
+  string player_version = 10;
+  string os             = 11;
+  string cdn            = 12;
+}
