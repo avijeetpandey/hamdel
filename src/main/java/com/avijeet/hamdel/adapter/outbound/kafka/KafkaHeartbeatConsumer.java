@@ -33,7 +33,7 @@ public class KafkaHeartbeatConsumer {
             @Header(KafkaHeaders.RECEIVED_PARTITION) List<Integer> partitions,
             @Header(KafkaHeaders.OFFSET) List<Long> offsets) {
 
-        log.debug("Consumed batch of {} events", payloads.size());
+        log.info("Consumed batch: size={} partitions={} offsets={}", payloads.size(), partitions, offsets);
         meterRegistry.counter("hamdel.kafka.consumed.total").increment(payloads.size());
 
         List<HeartbeatEventProto> events = payloads.stream()
@@ -44,6 +44,7 @@ public class KafkaHeartbeatConsumer {
 
         events.forEach(telemetryRepository::save);
         kpiCalculationService.processBatch(events);
+        log.info("Processed batch: raw={} new={} duplicates_dropped={}", payloads.size(), events.size(), payloads.size() - events.size());
     }
 
     private HeartbeatEventProto deserialize(byte[] payload) {
