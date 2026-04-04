@@ -5,16 +5,21 @@ import com.avijeet.hamdel.domain.model.SessionMetrics;
 import com.avijeet.hamdel.domain.port.outbound.MetricsRepository;
 import com.avijeet.hamdel.domain.port.outbound.TelemetryRepository;
 import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Application service that calculates KPI metrics from a batch of heartbeat events.
  * KPIs: Video Start Time (VST), Playback Failure Rate (PFR), Rebuffering Ratio.
+ *
+ * Gauges are backed by AtomicReference so Micrometer keeps a strong reference —
+ * avoids the classic "gauge returns NaN after GC" pitfall.
  */
 @Slf4j
 @Service
@@ -24,6 +29,17 @@ public class KpiCalculationService {
     private final TelemetryRepository telemetryRepository;
     private final MetricsRepository   metricsRepository;
     private final MeterRegistry        meterRegistry;
+
+    private final AtomicReference<Double> vstGauge      = new AtomicReference<>(0.0);
+    private final AtomicReference<Double> pfrGauge      = new AtomicReference<>(0.0);
+    private final AtomicReference<Double> rebufGauge    = new AtomicReference<>(0.0);
+
+    @PostConstruct
+    void registerGauges() {
+        meterRegistry.gauge("hamdel.kpi.vst_ms",     vstGauge,   AtomicReference::get);
+        meterRegistry.gauge("hamdel.kpi.pfr",         pfrGauge,   AtomicReference::get);
+        meterRegistry.gauge("hamdel.kpi.rebuf_ratio", rebufGauge, AtomicReference::get);
+    }
 
     public void processBatch(List<HeartbeatEventProto> events) {
         if (events.isEmpty()) {
@@ -57,9 +73,9 @@ public class KpiCalculationService {
 
         metricsRepository.save(metrics);
 
-        meterRegistry.gauge("hamdel.kpi.vst_ms",    avgVst);
-        meterRegistry.gauge("hamdel.kpi.pfr",        pfr);
-        meterRegistry.gauge("hamdel.kpi.rebuf_ratio", rebufferRatio);
+        vstGauge.set(avgVst);
+        pfrGauge.set(pfr);
+        rebufGauge.set(rebufferRatio);
 
         log.debug("KPI sessionId={} VST={}ms PFR={} RebufRatio={}", sessionId, avgVst, pfr, rebufferRatio);
     }

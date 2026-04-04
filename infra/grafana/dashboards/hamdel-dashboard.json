@@ -20,36 +20,44 @@
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Ingestion P99 Latency (ms)",
+      "title": "Ingestion Avg Latency (ms)",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum(rate(hamdel_ingest_latency_seconds_bucket[1m])) by (le)) * 1000",
-          "legendFormat": "P99"
+          "expr": "(rate(hamdel_ingest_latency_seconds_sum[1m]) / rate(hamdel_ingest_latency_seconds_count[1m])) * 1000",
+          "legendFormat": "Avg latency"
+        },
+        {
+          "expr": "hamdel_ingest_latency_seconds_max * 1000",
+          "legendFormat": "Max latency"
         }
       ]
     },
     {
       "id": 3,
       "type": "timeseries",
-      "title": "Kafka Consumer Lag",
+      "title": "Kafka Consumption Rate (events/s)",
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
       "targets": [
         {
-          "expr": "sum(kafka_consumer_records_lag) by (topic)",
-          "legendFormat": "{{topic}}"
+          "expr": "rate(hamdel_kafka_consumed_total[1m])",
+          "legendFormat": "consumed/s"
+        },
+        {
+          "expr": "rate(hamdel_ingest_latency_seconds_count[1m])",
+          "legendFormat": "ingested/s"
         }
       ]
     },
     {
       "id": 4,
       "type": "stat",
-      "title": "Panic Mode Active",
+      "title": "Circuit Breaker Open",
       "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
       "targets": [
         {
-          "expr": "hamdel_panic_mode_active",
-          "legendFormat": "Panic Mode"
+          "expr": "resilience4j_circuitbreaker_state{name=\"kafkaProducer\",state=\"open\"}",
+          "legendFormat": "CB Open"
         }
       ],
       "options": {
