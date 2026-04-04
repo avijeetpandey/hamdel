@@ -1,0 +1,45 @@
+# ── HPA — Ingress Deployment ──────────────────────────────────────────────────
+# Scales the ingress pods on CPU and memory.
+# At 70% CPU the application is still able to absorb load; above that the JVM
+# and Disruptor ring buffer start to see contention.
+#
+# Upper bound: 30 pods (each handles ~10-30k RPS depending on hardware).
+# Lower bound: 3 pods (one per Availability Zone for fault tolerance).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hamdel-ingress-hpa
+  namespace: hamdel
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hamdel-ingress
+  minReplicas: 3
+  maxReplicas: 30
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30    # react quickly to traffic spikes
+      policies:
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 120   # be conservative scaling down
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60

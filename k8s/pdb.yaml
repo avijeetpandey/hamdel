@@ -1,0 +1,27 @@
+# ── PodDisruptionBudgets ──────────────────────────────────────────────────────
+# Guarantees that rolling upgrades and node maintenance never take down
+# more than one pod at a time for each role.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: hamdel-ingress-pdb
+  namespace: hamdel
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: hamdel
+      role: ingress
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: hamdel-consumer-pdb
+  namespace: hamdel
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: hamdel
+      role: consumer

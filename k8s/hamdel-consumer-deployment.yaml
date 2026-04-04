@@ -1,0 +1,103 @@
+# ── Consumer / Processor Deployment ──────────────────────────────────────────
+# Role: consumes Kafka heartbeat-events, batch-persists to PostgreSQL, computes
+#       per-session KPIs. HTTP server stays on only for health probes.
+#       Consumer is ENABLED (hamdel.consumer.enabled=true, which is the default).
+#
+# Scaled by: KEDA on Kafka consumer-group lag (see keda-scaledobject.yaml)
+# Min replicas limited to the number of topic partitions / 2 so rebalance storms
+# are avoided when KEDA quickly spins up a large number of pods.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hamdel-consumer
+  namespace: hamdel
+  labels:
+    app: hamdel
+    role: consumer
+spec:
+  replicas: 3                  # KEDA takes over after initial deployment
+  selector:
+    matchLabels:
+      app: hamdel
+      role: consumer
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: hamdel
+        role: consumer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/actuator/prometheus"
+    spec:
+      terminationGracePeriodSeconds: 60   # consumer needs longer to finish a batch
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: hamdel
+                    role: consumer
+      containers:
+        - name: hamdel
+          image: hamdel:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: hamdel-config
+          env:
+            - name: HAMDEL_CONSUMER_ENABLED
+              value: "true"              # consumer pod: consumer ON
+            - name: SPRING_DATASOURCE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: hamdel-db-secret
+                  key: url
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: hamdel-db-secret
+                  key: username
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: hamdel-db-secret
+                  key: password
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "768Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 4
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            failureThreshold: 20
+            periodSeconds: 5

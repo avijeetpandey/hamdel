@@ -1,0 +1,67 @@
+# ── KEDA ScaledObject — Consumer Deployment ───────────────────────────────────
+# Scales hamdel-consumer pods based on Kafka consumer-group lag.
+#
+# Why KEDA instead of HPA for the consumer?
+#   CPU/memory do not reliably reflect whether the consumer is keeping up with
+#   the Kafka topic. A low-CPU consumer can still have a growing lag if events
+#   arrive faster than they are processed. KEDA's Kafka trigger uses the actual
+#   offset lag as the scaling signal.
+#
+# lagThreshold: 1000
+#   Target: 1 replica per 1000 messages of lag per partition (averaged).
+#   With 24 partitions and 1 000 lag/partition, KEDA targets 24 replicas.
+#   Max is capped at 24 (= number of partitions; one consumer per partition).
+#
+# activationLagThreshold: 100
+#   Scale from 0→1 only when lag exceeds 100. Prevents spurious scale-outs
+#   during quiet periods.
+#
+# pollingInterval: 15s — how often KEDA fetches lag from Kafka.
+# cooldownPeriod: 90s  — wait before scaling back down after lag drops.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: hamdel-consumer-scaledobject
+  namespace: hamdel
+spec:
+  scaleTargetRef:
+    name: hamdel-consumer
+  minReplicaCount: 2          # never go below 2 to avoid cold-start lag spikes
+  maxReplicaCount: 24         # hard cap = partition count
+  pollingInterval: 15
+  cooldownPeriod: 90
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka-headless.kafka.svc.cluster.local:9092
+        consumerGroup: hamdel-kpi-group
+        topic: heartbeat-events
+        lagThreshold: "1000"
+        activationLagThreshold: "100"
+        offsetResetPolicy: latest
+
+---
+# ── KEDA ScaledObject — Ingress (Prometheus custom metric variant) ─────────────
+# Optional second trigger: also scale ingress pods when the Disruptor ring buffer
+# overflow counter rate is high (indicates the buffer is saturating).
+# Requires keda-prometheus trigger and Prometheus scraping /actuator/prometheus.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: hamdel-ingress-overflow-scaledobject
+  namespace: hamdel
+spec:
+  scaleTargetRef:
+    name: hamdel-ingress
+  minReplicaCount: 3
+  maxReplicaCount: 30
+  pollingInterval: 20
+  cooldownPeriod: 60
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring.svc.cluster.local:9090
+        metricName: hamdel_buffer_overflow_total
+        # scale up when more than 50 overflows per minute are observed
+        threshold: "50"
+        query: sum(increase(hamdel_buffer_overflow_total{application="hamdel"}[1m]))
