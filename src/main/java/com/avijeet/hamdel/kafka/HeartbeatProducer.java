@@ -11,11 +11,15 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
- * Outbound adapter: publishes heartbeat events to Kafka.
+ * Outbound adapter: publishes heartbeat events to Kafka in batches.
  * Wraps send calls in a Resilience4j CircuitBreaker.
  * On circuit OPEN (Panic Mode), automatically reroutes to the in-memory fallback buffer.
  */
@@ -31,21 +35,40 @@ public class HeartbeatProducer implements HeartbeatPublisher {
     private final MeterRegistry                 meterRegistry;
     private final String                        topic;
     private final AtomicBoolean                 panicMode = new AtomicBoolean(false);
+    private final List<HeartbeatEvent>          eventBuffer;
+    private final int                           batchSize;
+    private final long                          batchTimeoutMs;
+    private final ScheduledExecutorService      scheduler;
+    private volatile long                       lastFlushTime;
 
     public HeartbeatProducer(
             KafkaTemplate<String, byte[]> kafkaTemplate,
             FallbackPublisher fallbackPublisher,
             CircuitBreakerRegistry circuitBreakerRegistry,
             MeterRegistry meterRegistry,
-            @Value("${hamdel.kafka.topic:heartbeat-events}") String topic) {
+            @Value("${hamdel.kafka.topic:heartbeat-events}") String topic,
+            @Value("${hamdel.kafka.batch-size:100}") int batchSize,
+            @Value("${hamdel.kafka.batch-timeout-ms:5000}") long batchTimeoutMs) {
         this.kafkaTemplate     = kafkaTemplate;
         this.fallbackPublisher = fallbackPublisher;
         this.circuitBreaker    = circuitBreakerRegistry.circuitBreaker(CB_NAME);
         this.meterRegistry     = meterRegistry;
         this.topic             = topic;
+        this.batchSize         = batchSize;
+        this.batchTimeoutMs    = batchTimeoutMs;
+        this.eventBuffer       = new ArrayList<>(batchSize);
+        this.scheduler         = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "kafka-batch-flusher");
+            t.setDaemon(true);
+            return t;
+        });
+        this.lastFlushTime     = System.currentTimeMillis();
 
         this.circuitBreaker.getEventPublisher()
                 .onStateTransition(event -> handleStateTransition(event.getStateTransition()));
+
+        // Schedule periodic flush task
+        scheduler.scheduleAtFixedRate(this::flushIfNeeded, batchTimeoutMs, batchTimeoutMs, TimeUnit.MILLISECONDS);
     }
 
     @Override
@@ -55,22 +78,91 @@ public class HeartbeatProducer implements HeartbeatPublisher {
             return;
         }
 
-        circuitBreaker.executeRunnable(() -> sendToKafka(event));
+        synchronized (eventBuffer) {
+            eventBuffer.add(event);
+            if (eventBuffer.size() >= batchSize) {
+                sendBatchToKafka();
+            }
+        }
     }
 
-    private void sendToKafka(HeartbeatEvent event) {
-        byte[] payload = serializeToProto(event);
-        kafkaTemplate.send(topic, event.getSessionId(), payload)
-                .exceptionally(ex -> {
-                    log.error("Kafka send failed for event={}", event.getEventId(), ex);
-                    throw new RuntimeException(ex);
-                });
+    @Override
+    public void publishBatch(List<HeartbeatEvent> events) {
+        if (circuitBreaker.getState() == CircuitBreaker.State.OPEN) {
+            for (HeartbeatEvent event : events) {
+                activatePanicMode(event);
+            }
+            return;
+        }
+
+        if (events.isEmpty()) {
+            return;
+        }
+
+        synchronized (eventBuffer) {
+            eventBuffer.addAll(events);
+            if (eventBuffer.size() >= batchSize) {
+                sendBatchToKafka();
+            }
+        }
+    }
+
+    @Override
+    public void flush() {
+        synchronized (eventBuffer) {
+            if (!eventBuffer.isEmpty()) {
+                sendBatchToKafka();
+            }
+        }
+    }
+
+    private void flushIfNeeded() {
+        synchronized (eventBuffer) {
+            if (!eventBuffer.isEmpty()) {
+                long timeSinceLastFlush = System.currentTimeMillis() - lastFlushTime;
+                if (timeSinceLastFlush >= batchTimeoutMs) {
+                    sendBatchToKafka();
+                }
+            }
+        }
+    }
+
+    private void sendBatchToKafka() {
+        if (eventBuffer.isEmpty()) {
+            return;
+        }
+
+        List<HeartbeatEvent> batch = new ArrayList<>(eventBuffer);
+        eventBuffer.clear();
+        lastFlushTime = System.currentTimeMillis();
+
+        circuitBreaker.executeRunnable(() -> {
+            try {
+                for (HeartbeatEvent event : batch) {
+                    byte[] payload = serializeToProto(event);
+                    kafkaTemplate.send(topic, event.getSessionId(), payload)
+                            .exceptionally(ex -> {
+                                log.error("Kafka send failed for event={}", event.getEventId(), ex);
+                                throw new RuntimeException(ex);
+                            });
+                }
+                meterRegistry.counter("hamdel.kafka.batch.sent").increment();
+                meterRegistry.counter("hamdel.kafka.events.sent").increment(batch.size());
+            } catch (Exception ex) {
+                log.error("Batch send to Kafka failed, re-buffering {} events", batch.size(), ex);
+                synchronized (eventBuffer) {
+                    eventBuffer.addAll(batch);
+                }
+                throw ex;
+            }
+        });
     }
 
     private void activatePanicMode(HeartbeatEvent event) {
         if (panicMode.compareAndSet(false, true)) {
             log.warn("Kafka unavailable — buffering to local fallback");
             meterRegistry.counter("hamdel.fallback.activations").increment();
+            flush();
         }
         meterRegistry.gauge("hamdel.fallback.active", 1.0);
         fallbackPublisher.publish(event);
@@ -95,16 +187,8 @@ public class HeartbeatProducer implements HeartbeatPublisher {
         int total = 0;
         List<HeartbeatEvent> batch;
         while (!(batch = fallbackPublisher.drain(500)).isEmpty()) {
-            for (HeartbeatEvent event : batch) {
-                try {
-                    sendToKafka(event);
-                    total++;
-                } catch (Exception ex) {
-                    log.error("Failed to replay fallback event to Kafka: eventId={}", event.getEventId(), ex);
-                    // re-buffer rather than lose
-                    fallbackPublisher.publish(event);
-                }
-            }
+            publishBatch(batch);
+            total += batch.size();
         }
         if (total > 0) {
             log.info("Fallback buffer drained: {} events replayed to Kafka", total);
@@ -131,3 +215,4 @@ public class HeartbeatProducer implements HeartbeatPublisher {
         return proto.toByteArray();
     }
 }
+
