@@ -1,0 +1,105 @@
+# ── Ingress Deployment ────────────────────────────────────────────────────────
+# Role: receives HTTP heartbeat events, enqueues to Disruptor ring buffer,
+#       publishes to Kafka. Consumer is DISABLED (hamdel.consumer.enabled=false).
+#
+# Scaled by: HPA on CPU/memory (see hpa.yaml)
+# Pod anti-affinity: spreads replicas across nodes for fault tolerance.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hamdel-ingress
+  namespace: hamdel
+  labels:
+    app: hamdel
+    role: ingress
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: hamdel
+      role: ingress
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 0        # zero-downtime rollout
+  template:
+    metadata:
+      labels:
+        app: hamdel
+        role: ingress
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/actuator/prometheus"
+    spec:
+      terminationGracePeriodSeconds: 30   # let in-flight requests drain
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: hamdel
+                    role: ingress
+      containers:
+        - name: hamdel
+          image: hamdel:latest           # replace with registry image
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: hamdel-config
+          env:
+            - name: HAMDEL_CONSUMER_ENABLED
+              value: "false"             # ingress pod: consumer OFF
+            - name: SPRING_DATASOURCE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: hamdel-db-secret
+                  key: url
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: hamdel-db-secret
+                  key: username
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: hamdel-db-secret
+                  key: password
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "1.5Gi"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 4
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            failureThreshold: 20
+            periodSeconds: 5
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]  # let load-balancer drain

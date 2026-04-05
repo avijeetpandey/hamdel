@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hamdel-config
+  namespace: hamdel
+data:
+  # Kafka
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka-headless.kafka.svc.cluster.local:9092"
+  HAMDEL_KAFKA_TOPIC: "heartbeat-events"
+  HAMDEL_KAFKA_DLT: "heartbeat-events-dlt"
+  HAMDEL_KAFKA_PARTITIONS: "24"
+  HAMDEL_KAFKA_CONSUMER_GROUP: "hamdel-kpi-group"
+
+  # Phase 1: ring buffer  — 128 K slots in production pods (65 K in local docker)
+  HAMDEL_BUFFER_RING_BUFFER_SIZE: "131072"
+
+  # Actuator
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,prometheus,metrics"
+  MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: "always"
